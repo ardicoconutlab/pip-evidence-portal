@@ -21,8 +21,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ fil
     const { drive } = getDriveClient();
     const result = await drive.files.get({ fileId: file.drive_file_id, alt: "media", supportsAllDrives: true }, { responseType: "stream" });
     const body = Readable.toWeb(result.data as Readable) as ReadableStream;
-    const safeName = file.original_name.replace(/[\r\n"]/g, "_");
-    return new Response(body, { headers: { "Content-Type": file.mime_type ?? "application/octet-stream", "Content-Disposition": `inline; filename="${safeName}"`, "Cache-Control": "private, no-store" } });
+    const safeName = file.original_name.replace(/[^\x20-\x7E]|["\\]/g, "_");
+    return new Response(body, { headers: { "Content-Type": file.mime_type ?? "application/octet-stream", "Content-Disposition": `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(file.original_name)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox" } });
   } catch {
     return NextResponse.json({ error: "The stored file could not be opened." }, { status: 502 });
   }

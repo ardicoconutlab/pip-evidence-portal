@@ -24,6 +24,8 @@ export interface Investment {
 }
 
 export interface EvidenceFile {
+  mimeType?: string;
+  localUrl?: string;
   id: string;
   investmentId: string;
   categoryId: string;

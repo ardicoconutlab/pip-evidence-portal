@@ -43,7 +43,7 @@ export default async function PortalPage() {
   const projects = ((projectsResult.data ?? []) as Array<{ id: string; code: string; name: string; status: "active" | "archived" }>).map((item): Project => ({ ...item, investorCount: projectCounts[item.id] ?? 0 }));
   const files = ((filesResult.data ?? []) as Array<{ id: string; investment_id: string; category_id: string; original_name: string; mime_type: string | null; byte_size: number; uploaded_at: string | null; status: "available" }>).map((item): EvidenceFile => ({
     id: item.id, investmentId: item.investment_id, categoryId: item.category_id, name: item.original_name,
-    type: item.mime_type?.split("/").pop()?.toUpperCase() ?? "FILE", size: item.byte_size,
+    mimeType: item.mime_type ?? undefined, type: item.mime_type?.split("/").pop()?.toUpperCase() ?? "FILE", size: item.byte_size,
     uploadedAt: item.uploaded_at ?? new Date().toISOString(), status: item.status,
   }));
   const investmentCounts = investments.reduce<Record<string, number>>((counts, investment) => ({ ...counts, [investment.ownerId]: (counts[investment.ownerId] ?? 0) + 1 }), {});
@@ -51,5 +51,5 @@ export default async function PortalPage() {
     id: item.id, name: item.full_name, phone: item.phone, role: item.role, isApproved: item.is_approved, isActive: item.is_active, investmentCount: investmentCounts[item.id] ?? 0,
   }));
 
-  return <PortalExperience previewMode={false} initialName={profile.full_name} initialRole={profile.role as Role} initialProjects={projects} initialInvestments={investments} initialFiles={files} initialPeople={people} />;
+  return <PortalExperience previewMode={false} initialUserId={user.id} initialName={profile.full_name} initialRole={profile.role as Role} initialProjects={projects} initialInvestments={investments} initialFiles={files} initialPeople={people} />;
 }

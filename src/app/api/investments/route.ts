@@ -32,7 +32,7 @@ export async function POST(request: Request) {
       drive_status: "ready",
       investment_id: investment.id,
     })));
-    const { error: folderError } = await supabase.from("investment_folders").insert(folders);
+    const { data: savedFolders, error: folderError } = await supabase.from("investment_folders").insert(folders).select("id, category_id");
     if (folderError) throw folderError;
     return NextResponse.json({ investment: {
       id: investment.id,
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
       createdAt: investment.created_at,
       lastActivityAt: investment.created_at,
       fileCount: 0,
-      folderIds: Object.fromEntries(folders.map((folder) => [folder.category_id, folder.drive_folder_id])),
+      folderIds: Object.fromEntries((savedFolders ?? []).map((folder) => [folder.category_id, folder.id])),
     } });
   } catch {
     await supabase.from("investments").update({ drive_status: "failed" }).eq("id", investment.id);

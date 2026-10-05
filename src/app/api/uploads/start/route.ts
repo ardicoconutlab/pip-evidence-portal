@@ -42,7 +42,7 @@ export async function POST(request: Request) {
       expires_at: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000).toISOString(),
     }).select("id").single();
     if (sessionError || !session) throw new Error("Could not create upload session.");
-    return NextResponse.json({ uploadId: session.id, chunkSize: 4_000_000 });
+    return NextResponse.json({ uploadId: session.id, chunkSize: 3_932_160 });
   } catch {
     await supabase.rpc("release_storage_reservation", { p_owner_id: access.user.id, p_bytes: input.size });
     return NextResponse.json({ error: "We could not prepare your file upload. Please try again." }, { status: 502 });

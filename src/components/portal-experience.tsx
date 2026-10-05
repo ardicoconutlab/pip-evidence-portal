@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useMemo, useState } from "react";
 import {
   Archive, Bell, ChevronRight, CircleHelp, FilePlus2, FileText, FolderOpen,
   LayoutList, LoaderCircle, LogOut, Menu, MoreHorizontal, Plus, Search,
@@ -15,6 +15,7 @@ const MAX_STORAGE = 250_000_000;
 
 interface PortalExperienceProps {
   previewMode: boolean;
+  initialUserId?: string;
   initialRole?: Role;
   initialName?: string;
   initialProjects?: Project[];
@@ -25,6 +26,7 @@ interface PortalExperienceProps {
 
 export function PortalExperience({
   previewMode,
+  initialUserId = "user-001",
   initialRole = "investor",
   initialName = "Mary Tan",
   initialProjects = demoProjects,
@@ -42,9 +44,11 @@ export function PortalExperience({
   const [selectedInvestment, setSelectedInvestment] = useState<Investment | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const localUrls = useRef<string[]>([]);
+  useEffect(() => () => localUrls.current.forEach((url) => URL.revokeObjectURL(url)), []);
   const [toast, setToast] = useState("");
 
-  const ownedInvestments = role === "admin" ? investments : investments.filter((investment) => investment.ownerId === "user-001");
+  const ownedInvestments = role === "admin" ? investments : investments.filter((investment) => investment.ownerId === initialUserId);
   const usedBytes = files.filter((file) => file.investmentId && (role === "admin" || ownedInvestments.some((investment) => investment.id === file.investmentId))).reduce((total, file) => total + file.size, 0);
 
   const showToast = (message: string) => {
@@ -55,7 +59,7 @@ export function PortalExperience({
   async function createInvestment(projectId: string) {
     const project = projects.find((item) => item.id === projectId);
     if (!project) return;
-    const existing = investments.find((item) => item.projectId === projectId && item.ownerId === "user-001");
+    const existing = investments.find((item) => item.projectId === projectId && item.ownerId === initialUserId);
     if (existing) {
       setSelectedInvestment(existing);
       setCreateOpen(false);
@@ -80,7 +84,7 @@ export function PortalExperience({
       reference: `INV-${String(investments.length + 123).padStart(6, "0")}`,
       projectId: project.id,
       projectName: project.name,
-      ownerId: "user-001",
+      ownerId: initialUserId,
       ownerName: initialName,
       createdAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
@@ -132,7 +136,9 @@ export function PortalExperience({
       return;
     }
     let uploadedFileId: string | undefined;
-    if (!previewMode && folderId) {
+    if (!previewMode && !folderId) { showToast("This folder is not ready for uploads. Please refresh or contact the administrator."); return; }
+    if (!file.size) { showToast("This file is empty. Please choose another file."); return; }
+    if (!previewMode) {
       try {
         const start = await fetch("/api/uploads/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ investmentId: selectedInvestment.id, folderId, categoryId, name: file.name, mimeType: file.type || "application/octet-stream", size: file.size }) });
         const session = await start.json();
@@ -145,10 +151,14 @@ export function PortalExperience({
           if (!response.ok) throw new Error(result.error ?? "The upload was interrupted.");
           if (result.complete) uploadedFileId = result.fileId;
         }
+        if (!uploadedFileId) throw new Error("The upload was not confirmed. Please try again.");
       } catch (caught) { showToast(caught instanceof Error ? caught.message : "The upload was interrupted."); return; }
     }
+    const localUrl = previewMode ? URL.createObjectURL(file) : undefined;
+    if (localUrl) localUrls.current.push(localUrl);
     const newFile: EvidenceFile = {
-      id: uploadedFileId ?? `file-${Date.now()}`,
+      localUrl, mimeType: file.type,
+      id: uploadedFileId ?? `file-${crypto.randomUUID()}`,
       investmentId: selectedInvestment.id,
       categoryId,
       name: file.name,
@@ -182,8 +192,8 @@ export function PortalExperience({
           {view === "settings" && role === "admin" && <SettingsView previewMode={previewMode} onToast={showToast} />}
         </main>
       </div>
-      {selectedInvestment && <InvestmentDrawer investment={selectedInvestment} files={files.filter((file) => file.investmentId === selectedInvestment.id)} storageRemaining={Math.max(MAX_STORAGE - usedBytes, 0)} onClose={() => setSelectedInvestment(null)} onFile={addLocalFile} />}
-      {createOpen && <CreateInvestmentDialog projects={projects} investments={investments.filter((investment) => investment.ownerId === "user-001")} onClose={() => setCreateOpen(false)} onCreate={createInvestment} />}
+      {selectedInvestment && <InvestmentDrawer previewMode={previewMode} investment={selectedInvestment} files={files.filter((file) => file.investmentId === selectedInvestment.id)} storageRemaining={Math.max(MAX_STORAGE - usedBytes, 0)} onClose={() => setSelectedInvestment(null)} onFile={addLocalFile} />}
+      {createOpen && <CreateInvestmentDialog projects={projects} investments={investments.filter((investment) => investment.ownerId === initialUserId)} onClose={() => setCreateOpen(false)} onCreate={createInvestment} />}
       {createProjectOpen && <CreateProjectDialog onClose={() => setCreateProjectOpen(false)} onCreate={createProject} />}
     </div>
   );
@@ -215,9 +225,49 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 
 function SettingsView({ previewMode, onToast }: { previewMode: boolean; onToast: (message: string) => void }) { const [approval, setApproval] = useState(false); async function changeApproval() { const next = !approval; if (!previewMode) { try { const response = await fetch("/api/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requireRegistrationApproval: next }) }); const result = await response.json(); if (!response.ok) throw new Error(result.error ?? "Setting could not be updated."); } catch (caught) { onToast(caught instanceof Error ? caught.message : "Setting could not be updated."); return; } } setApproval(next); onToast(next ? "New registrations will need approval." : "New registrations will be approved automatically."); } return <section><div><p className="text-base font-bold text-teal">Administration</p><h1 className="mt-1 text-4xl font-extrabold tracking-tight">Settings</h1><p className="mt-3 text-lg text-slate-600">Control how new registrations are handled.</p></div><div className="panel mt-8 max-w-2xl p-6"><div className="flex gap-4"><ShieldCheck className="mt-1 shrink-0 text-teal" size={28} /><div className="flex-1"><h2 className="text-xl font-extrabold">Require approval for new registrations</h2><p className="mt-2 text-base leading-6 text-slate-600">When turned off, new registrations are approved automatically. Existing user approvals do not change.</p><button className={`mt-5 inline-flex min-h-12 items-center gap-3 rounded-xl px-4 font-bold ${approval ? "bg-teal text-white" : "bg-slate-100 text-slate-700"}`} onClick={() => void changeApproval()}><span className={`relative h-6 w-11 rounded-full ${approval ? "bg-white/30" : "bg-slate-300"}`}><span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition ${approval ? "left-6" : "left-1"}`} /></span>{approval ? "Approval required" : "Automatic approval"}</button></div></div></div><div className="panel mt-5 max-w-2xl p-6"><h2 className="text-xl font-extrabold">Storage allowance</h2><p className="mt-2 text-base text-slate-600">Each investor can store up to <strong>250 MB</strong> across all their project collections.</p></div></section>; }
 
-function InvestmentDrawer({ investment, files, storageRemaining, onClose, onFile }: { investment: Investment; files: EvidenceFile[]; storageRemaining: number; onClose: () => void; onFile: (file: File, categoryId: string, folderId?: string) => void }) { const [category, setCategory] = useState("contract"); const categoryFiles = files.filter((file) => file.categoryId === category); const selected = evidenceCategories.find((item) => item.id === category)!; return <div className="fixed inset-0 z-40 overflow-hidden"><button aria-label="Close collection" className="absolute inset-0 bg-slate-950/45" onClick={onClose} /><section role="dialog" aria-modal="true" aria-label={`${investment.projectName} evidence`} className="absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col bg-white shadow-2xl"><header className="flex items-start justify-between border-b border-slate-200 px-5 py-5 sm:px-8"><div><p className="text-sm font-bold text-teal">{investment.reference}</p><h2 className="mt-1 text-2xl font-extrabold text-ink">{investment.projectName}</h2><p className="mt-1 text-base text-slate-600">Choose a folder to view or upload evidence.</p></div><button className="rounded-xl p-3 text-slate-600 hover:bg-slate-100" onClick={onClose} aria-label="Close"><X /></button></header><div className="flex min-h-0 flex-1 flex-col md:flex-row"><aside className="border-b border-slate-200 bg-slate-50 p-3 md:w-64 md:overflow-y-auto md:border-b-0 md:border-r">{evidenceCategories.map((item) => <button key={item.id} onClick={() => setCategory(item.id)} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left ${category === item.id ? "bg-white text-teal shadow-sm" : "text-slate-700 hover:bg-white/70"}`}><span className={`flex h-7 w-7 items-center justify-center rounded-md text-xs font-extrabold ${category === item.id ? "bg-teal text-white" : "bg-slate-200 text-slate-600"}`}>{item.number}</span><span className="min-w-0 flex-1 truncate text-sm font-bold">{item.name}</span><span className="text-xs font-bold text-slate-500">{files.filter((file) => file.categoryId === item.id).length}</span></button>)}</aside><div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-8"><div><h3 className="text-xl font-extrabold">{selected.name}</h3><p className="mt-1 text-base text-slate-600">{selected.hint}</p></div><div className="mt-6 space-y-3">{categoryFiles.length ? categoryFiles.map((file) => <div key={file.id} className="flex items-center gap-3 rounded-xl border border-slate-200 p-4"><span className="flex h-11 w-11 items-center justify-center rounded-lg bg-rose-50 text-rose-600"><FileText size={22} /></span><span className="min-w-0 flex-1"><strong className="block truncate text-base">{file.name}</strong><span className="mt-1 block text-sm text-slate-500">{file.type} · {formatBytes(file.size)} · {formatDate(file.uploadedAt)}</span></span><MoreHorizontal className="text-slate-500" /></div>) : <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-base text-slate-600">No files have been added to this folder yet.</div>}</div><UploadBox categoryId={category} folderId={investment.folderIds?.[category]} storageRemaining={storageRemaining} onFile={onFile} /></div></div></section></div>; }
+function InvestmentDrawer({ previewMode, investment, files, storageRemaining, onClose, onFile }: { previewMode: boolean; investment: Investment; files: EvidenceFile[]; storageRemaining: number; onClose: () => void; onFile: (file: File, categoryId: string, folderId?: string) => Promise<void> }) { const [previewFile, setPreviewFile] = useState<EvidenceFile | null>(null); const [category, setCategory] = useState("contract"); const categoryFiles = files.filter((file) => file.categoryId === category); const selected = evidenceCategories.find((item) => item.id === category)!; return <div className="fixed inset-0 z-40 overflow-hidden"><button aria-label="Close collection" className="absolute inset-0 bg-slate-950/45" onClick={onClose} /><section role="dialog" aria-modal="true" aria-label={`${investment.projectName} evidence`} className="absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col bg-white shadow-2xl"><header className="flex items-start justify-between border-b border-slate-200 px-5 py-5 sm:px-8"><div><p className="text-sm font-bold text-teal">{investment.reference}</p><h2 className="mt-1 text-2xl font-extrabold text-ink">{investment.projectName}</h2><p className="mt-1 text-base text-slate-600">Choose a folder to view or upload evidence.</p></div><button className="rounded-xl p-3 text-slate-600 hover:bg-slate-100" onClick={onClose} aria-label="Close"><X /></button></header><div className="flex min-h-0 flex-1 flex-col md:flex-row"><aside className="border-b border-slate-200 bg-slate-50 p-3 md:w-64 md:overflow-y-auto md:border-b-0 md:border-r">{evidenceCategories.map((item) => <button key={item.id} onClick={() => setCategory(item.id)} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left ${category === item.id ? "bg-white text-teal shadow-sm" : "text-slate-700 hover:bg-white/70"}`}><span className={`flex h-7 w-7 items-center justify-center rounded-md text-xs font-extrabold ${category === item.id ? "bg-teal text-white" : "bg-slate-200 text-slate-600"}`}>{item.number}</span><span className="min-w-0 flex-1 truncate text-sm font-bold">{item.name}</span><span className="text-xs font-bold text-slate-500">{files.filter((file) => file.categoryId === item.id).length}</span></button>)}</aside><div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-8"><div><h3 className="text-xl font-extrabold">{selected.name}</h3><p className="mt-1 text-base text-slate-600">{selected.hint}</p></div><div className="mt-6 space-y-3">{categoryFiles.length ? categoryFiles.map((file) => <div key={file.id} className="flex items-center gap-3 rounded-xl border border-slate-200 p-4"><span className="flex h-11 w-11 items-center justify-center rounded-lg bg-rose-50 text-rose-600"><FileText size={22} /></span><span className="min-w-0 flex-1"><strong className="block truncate text-base">{file.name}</strong><span className="mt-1 block text-sm text-slate-500">{file.type} · {formatBytes(file.size)} · {formatDate(file.uploadedAt)}</span></span><button className="rounded-lg px-3 py-2 font-bold text-teal hover:bg-teal-50" onClick={() => setPreviewFile(file)}>View<span className="sr-only"> {file.name}</span></button></div>) : <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-base text-slate-600">No files have been added to this folder yet.</div>}</div><UploadBox categoryId={category} folderId={investment.folderIds?.[category]} storageRemaining={storageRemaining} onFile={onFile} /></div></div></section>{previewFile && <EvidencePreview key={previewFile.id} file={previewFile} previewMode={previewMode} onClose={() => setPreviewFile(null)} />}</div>; }
 
-function UploadBox({ categoryId, folderId, storageRemaining, onFile }: { categoryId: string; folderId?: string; storageRemaining: number; onFile: (file: File, categoryId: string, folderId?: string) => void }) { function choose(event: ChangeEvent<HTMLInputElement>) { const selected = event.target.files; if (selected?.length) Array.from(selected).forEach((file) => onFile(file, categoryId, folderId)); event.target.value = ""; } return <label className="mt-6 flex cursor-pointer flex-col items-center rounded-2xl border-2 border-dashed border-teal bg-teal-50 px-5 py-8 text-center transition hover:bg-[#d9f0ef]"><span className="flex h-12 w-12 items-center justify-center rounded-full bg-teal text-white"><Upload size={23} /></span><strong className="mt-3 text-lg text-ink">Upload evidence</strong><span className="mt-1 text-base text-slate-600">Choose files from your phone or computer</span><span className="mt-3 text-sm font-bold text-slate-500">{formatBytes(storageRemaining)} remaining</span><input type="file" className="sr-only" multiple onChange={choose} /></label>; }
+function UploadBox({ categoryId, folderId, storageRemaining, onFile }: { categoryId: string; folderId?: string; storageRemaining: number; onFile: (file: File, categoryId: string, folderId?: string) => Promise<void> }) {
+  const [dragging, setDragging] = useState(false);
+  const [progress, setProgress] = useState("");
+  const busy = useRef(false);
+  async function upload(selected: File[]) {
+    if (busy.current || !selected.length) return;
+    if (selected.reduce((sum, file) => sum + file.size, 0) > storageRemaining) { setProgress("These files exceed your remaining storage. Choose fewer files."); return; }
+    busy.current = true;
+    try { for (let index = 0; index < selected.length; index++) { setProgress(`Uploading ${index + 1} of ${selected.length}: ${selected[index].name}`); await onFile(selected[index], categoryId, folderId); } }
+    finally { busy.current = false; setProgress(""); }
+  }
+  function choose(event: ChangeEvent<HTMLInputElement>) { const selected = Array.from(event.target.files ?? []); event.target.value = ""; void upload(selected); }
+  return <div className="mt-6"><label onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = busy.current ? "none" : "copy"; setDragging(true); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); void upload(Array.from(event.dataTransfer.files)); }} className={`flex cursor-pointer flex-col items-center rounded-2xl border-2 border-dashed border-teal px-5 py-8 text-center transition focus-within:ring-2 focus-within:ring-teal ${dragging ? "bg-[#d9f0ef]" : "bg-teal-50"}`}>
+    <Upload size={28} className="text-teal" /><strong className="mt-3 text-lg">{busy.current ? "Uploading evidence…" : "Drop files here or choose files"}</strong><span className="mt-1 text-base text-slate-600">Choose files from your phone or computer</span><span className="mt-3 text-sm font-bold text-slate-500">{formatBytes(storageRemaining)} remaining</span><input aria-label="Upload evidence" type="file" className="sr-only" multiple disabled={busy.current} onChange={choose} />
+  </label><p role="status" className="mt-2 break-words text-sm text-slate-600">{progress}</p></div>;
+}
+
+function EvidencePreview({ file, previewMode, onClose }: { file: EvidenceFile; previewMode: boolean; onClose: () => void }) {
+  const [url, setUrl] = useState(file.localUrl ?? "");
+  const [error, setError] = useState("");
+  const [mime, setMime] = useState(file.mimeType ?? "");
+  useEffect(() => {
+    if (file.localUrl) return;
+    if (previewMode) { setError("This sample file has no stored content. Upload a file to try the preview. Preview uploads last only until you refresh."); return; }
+    const controller = new AbortController(); let objectUrl = "";
+    void (async () => { try {
+      const response = await fetch(`/api/files/${file.id}`, { signal: controller.signal });
+      if (!response.ok) throw new Error("This file could not be opened. Please try again.");
+      const blob = await response.blob(); if (controller.signal.aborted) return;
+      objectUrl = URL.createObjectURL(blob); setMime(blob.type); setUrl(objectUrl);
+    } catch (caught) { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "This file could not be opened."); } })();
+    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [file.id, file.localUrl, previewMode]);
+  useEffect(() => { const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener); }, [onClose]);
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const kind = /^(image\/(jpeg|png|gif|webp|avif|bmp))$/.test(mime) || /^(jpe?g|png|gif|webp|avif|bmp)$/.test(extension) ? "image" : mime.startsWith("audio/") || /^(mp3|wav|ogg|m4a|aac|flac)$/.test(extension) ? "audio" : mime.startsWith("video/") || /^(mp4|webm|mov)$/.test(extension) ? "video" : mime === "application/pdf" || extension === "pdf" ? "pdf" : "other";
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-3 sm:p-6"><section role="dialog" aria-modal="true" aria-label={`Preview ${file.name}`} className="flex max-h-full w-full max-w-4xl flex-col rounded-2xl bg-white p-5"><header className="flex items-center justify-between gap-3"><h2 className="break-all text-lg font-bold">{file.name}</h2><button autoFocus aria-label="Close preview" onClick={onClose} className="rounded-lg p-3"><X /></button></header><div className="min-h-0 overflow-auto py-4">
+    {error ? <p role="alert">{error}</p> : !url ? <p role="status">Loading file…</p> : kind === "image" ? <img src={url} alt={file.name} className="mx-auto max-h-[65vh] object-contain" /> : kind === "audio" ? <audio controls src={url} className="w-full" onError={() => setError("Your browser cannot play this audio format. Download the file to open it.")} /> : kind === "video" ? <video controls src={url} className="max-h-[65vh] w-full" onError={() => setError("Your browser cannot play this video format. Download the file to open it.")} /> : kind === "pdf" ? <iframe sandbox="" title={file.name} src={url} className="h-[65vh] w-full" /> : <p>This file format cannot be previewed here. Download it to open it on your device.</p>}
+  </div>{url && <a href={url} download={file.name} className="button-primary self-start">Download file</a>}</section></div>;
+}
+
 
 function CreateInvestmentDialog({ projects, investments, onClose, onCreate }: { projects: Project[]; investments: Investment[]; onClose: () => void; onCreate: (projectId: string) => void | Promise<void> }) { const [projectId, setProjectId] = useState(""); return <Modal title="Create an investment" subtitle="Choose the project for this evidence collection." onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); if (projectId) void onCreate(projectId); }} className="mt-6"><label className="field-label" htmlFor="project">Project</label><select id="project" className="field-input" required value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">Choose a project</option>{projects.filter((project) => project.status === "active").map((project) => <option key={project.id} value={project.id}>{project.name}{investments.some((investment) => investment.projectId === project.id) ? " — collection exists" : ""}</option>)}</select><p className="mt-3 text-sm leading-5 text-slate-600">A collection has seven folders for your contract, payments, police report and other evidence.</p><button className="button-primary mt-7 w-full"><FilePlus2 size={20} />Create evidence collection</button></form></Modal>; }
 
